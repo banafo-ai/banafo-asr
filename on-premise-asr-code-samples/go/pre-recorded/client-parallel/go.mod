@@ -1,4 +1,4 @@
-module banafo.ai/post-processed-client-parallel
+module banafo.ai/pre-recorded-client-parallel
 
 go 1.22.4
 

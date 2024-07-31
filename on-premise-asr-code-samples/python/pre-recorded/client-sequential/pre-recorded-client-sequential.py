@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 """
-A websocket client for post-processed-websocket-server
+A websocket client for banafo-pre-recorded-server
 
 This file shows how to use a single connection to transcribe multiple
 files sequentially.
 
 Usage:
-    ./post-processed-client-sequential.py \
+    ./pre-recorded-client-sequential.py \
       --addr localhost \
       --port 6006 \
       /path/to/foo.wav \

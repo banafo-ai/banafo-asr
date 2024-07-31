@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 """
-A websocket client for post-processed-websocket-server
+A websocket client for banafo-pre-recorded-server
 
 This file shows how to transcribe multiple
 files in parallel. We create a separate connection for transcribing each file.
 
 Usage:
-    ./post-processed-client-parallel.py \
+    ./pre-recorded-client-parallel.py \
       --addr localhost \
       --port 6006 \
       /path/to/foo.wav \

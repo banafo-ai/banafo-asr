@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-A websocket client for streaming-websocket-server
+A websocket client for banafo-streaming-server
 
 Usage:
     ./streaming-client-file.py \

@@ -1,4 +1,4 @@
-module banafo.ai/post-processed-client-sequential
+module banafo.ai/pre-recorded-client-sequential
 
 go 1.22.4
 
