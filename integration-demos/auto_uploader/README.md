@@ -5,5 +5,5 @@ It automatically transcribes any audio files found in these directories and save
 
 ## Getting Started
 
-Full documentation and setup guidelines could be found [here](banafo.ai/docs/demos/#auto-uploader)
+Full documentation and setup guidelines could be found [here](https://banafo.ai/docs/demos/#auto-uploader)
 
