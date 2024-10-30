@@ -1,0 +1,19 @@
+# https://opensource.com/article/20/7/systemd-timers
+#
+# This timer unit is for Banafo auto_uploader service
+# By Dimitar Kokov
+#
+
+[Unit]
+Description=Banafo auto_uploader
+Requires=auto_uploader.service
+
+[Timer]
+OnBootSec=1min
+OnStartupSec=1min
+OnUnitActiveSec=5min
+#OnCalendar=*-*-* *:*:05
+Unit=auto_uploader.service
+
+[Install]
+WantedBy=timers.target

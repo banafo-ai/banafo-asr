@@ -1,0 +1,16 @@
+# https://opensource.com/article/20/7/systemd-timers
+#
+# This service unit is for Banafo auto_uploader
+# By Dimitar Kokov
+#
+
+[Unit]
+Description=Banafo auto_uploader
+Wants=auto_uploader.timer
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/auto_uploader/auto_uploader.sh
+
+[Install]
+WantedBy=multi-user.target

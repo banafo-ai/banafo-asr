@@ -1,0 +1,7 @@
+pydub
+numpy
+websockets
+tabulate
+pyinotify
+argparse
+requests

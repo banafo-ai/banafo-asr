@@ -1,0 +1,18 @@
+# https://medium.com/@guemandeuhassler96/run-your-python-script-as-a-linux-daemon-9a82ed427c1a
+#
+# This service unit is for Banafo auto_uploader_events
+# By Dimitar Kokov
+#
+
+[Unit]
+Description=”Banafo auto_uploader_events”
+
+[Service]
+Restart=always
+Environment=TASKS_NUMS=10 MAX_QUEUE_SIZE=1000
+#EnvironmentFile=/etc/default/auto_uploader
+WorkingDirectory=/usr/local/auto_uploader/
+ExecStart=/usr/local/auto_uploader/python/auto_uploader_events.py --task-nums $TASKS_NUMS --max-queue-size $MAX_QUEUE_SIZE
+
+[Install]
+WantedBy=multi-user.target
