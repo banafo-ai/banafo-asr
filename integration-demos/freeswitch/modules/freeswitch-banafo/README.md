@@ -2,12 +2,6 @@
 
 This module works with [Banafo on-promise ASR server](https://banafo.ai/en/on-premise-asr) or with [Banafo Streaming API](https://banafo.ai/docs/api/#streaming).
 
-``` bash
-git clone https://github.com/banafo-ai/banafo-asr.git
-
-cd banafo-asr/integration-demos/freeswitch/modules/freeswitch-banafo/
-```
-
 <br>
 
 ## <u>compile and install</u>
@@ -76,29 +70,21 @@ cp -v banafo_transcribe.conf.xml /usr/local/freeswitch/conf/autoload_configs/
 
 		<!-- Banafo ASR server sample_rate -->
 		<param name="sample_rate" value="16000"/>
-	
-		<!-- json,text -->
-		<param name="result_mode" value="json"/>
 
 		<!-- Callback URL -->
 		<param name="callback_url" value="ws://127.0.0.1:8000"/>
-
-		<!-- sample rate will send to the Banafo ASR server as header (first 4 bytes) -->
-		<param name="send_sample_rate" value="no"/>
 	</profile>
 		<profile name="en-US">
 		<param name="host" value="app.banafo.ai"/>
 		<param name="port" value="443"/>
 		<param name="prot" value="wss"/>
 		<param name="sample_rate" value="16000"/>
-		<param name="result_mode" value="json"/> 
 	</profile>
 	<profile name="bg">
 		<param name="host" value="localhost"/>
 		<param name="port" value="6007"/>
 		<param name="prot" value="wss"/>
 		<param name="sample_rate" value="8000"/>
-		<param name="result_mode" value="json"/>
 	</profile>
   </profiles>
 </configuration>
@@ -145,6 +131,19 @@ There are examples how to use **'banafo_transcribe'** application [2] in the you
       <action application="echo" />
       <action application="hangup" />
     </condition>
+ </extension>
+
+ <extension name="local-conf-room">
+    <condition field="destination_number" expression="^99998$">
+      <action application="set" data="answer_delay=0"/>
+      <action application="answer" />
+      <action application="log" data="uuid: ${uuid}"/>
+      <action application="set" data="lang=en"/>
+      <action application="banafo_transcribe" data="${uuid} start ${lang}" />
+      <action application="conference" data="$1-${domain_name}@default"/>
+      <action application="hangup" />
+    </condition>
+ </extension>
 
 ```
 
@@ -212,3 +211,4 @@ audio codecs: g711,opus,speex,etc
 ***Test extensions:***
 * 99996 to call to Banafo on-premise server ( localhost )
 * 99997 to call to Banafo API ( https://banafo.ai )
+* 99998 to call a conference room and send audio stream to Banafo on-promise server

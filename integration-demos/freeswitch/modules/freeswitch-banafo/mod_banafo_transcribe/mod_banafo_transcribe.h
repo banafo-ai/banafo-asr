@@ -2,6 +2,7 @@
 #define __MOD_BANAFO_TRANSCRIBE_H__
 
 #include <switch.h>
+#include <private/switch_core_pvt.h>
 #include <speex/speex_resampler.h>
 
 #include <unistd.h>
@@ -27,6 +28,8 @@
 #define CB_PATH_LEN 255
 #define CB_URL_LEN 1024
 
+#define SIP_USERNAME_LEN 255
+
 typedef void (*responseHandler_t)(switch_core_session_t* session, const char* eventName, const char* json, const char* bugname, int finished);
 
 typedef enum prot {
@@ -34,10 +37,11 @@ typedef enum prot {
   wss
 } prot_t;
 
-typedef enum result_mode {
-  text,
-  json
-} result_mode_t;
+typedef enum channel_mode_s {
+  read_mode=1,
+  write_mode,
+  rw_mode
+} channel_mode_t;
 
 typedef struct mod_banafo_transcribe_globals_s {
   switch_memory_pool_t *pool;
@@ -60,16 +64,21 @@ typedef struct mod_banafo_transcribe_conn_s {
   char *banafo_asr_hostname;
   char *callback_url;
   uint16_t banafo_asr_port;
-  result_mode_t result_mode;
-  uint8_t send_sample_rate;
+  channel_mode_t channel_mode;
 } mod_banafo_transcribe_conn_t;
+
+typedef struct call_info_s {
+  char src[SIP_USERNAME_LEN];
+  char dst[SIP_USERNAME_LEN];
+} call_info_t;
 
 struct private_data {
 	switch_mutex_t *mutex;
 	char sessionId[MAX_SESSION_ID];
   SpeexResamplerState *resampler;
   responseHandler_t responseHandler;
-  void *pAudioPipe;
+  void *pAudioPipeR;
+  void *pAudioPipeW;
   void *pCallBack;
   int ws_state;
   char host[MAX_WS_URL_LEN];
@@ -81,9 +90,10 @@ struct private_data {
   unsigned int id;
   int buffer_overrun_notified:1;
   int is_finished:1;
-  int is_started:1; // ???
-  FILE *fp; // ???
+  FILE *fp;
+  FILE *dp;
   mod_banafo_transcribe_conn_t *banafo_conn;
+  call_info_t *call_info_ptr;
 };
 
 typedef struct private_data private_t;

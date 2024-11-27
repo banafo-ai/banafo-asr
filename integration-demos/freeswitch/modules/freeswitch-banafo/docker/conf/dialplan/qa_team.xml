@@ -44,4 +44,16 @@
     </condition>
  </extension>
 
+ <extension name="local-conf-room">
+    <condition field="destination_number" expression="^99998$">
+      <action application="set" data="answer_delay=0"/>
+      <action application="answer" />
+      <action application="log" data="uuid: ${uuid}"/>
+      <action application="set" data="lang=en"/>
+      <action application="banafo_transcribe" data="${uuid} start ${lang}" />
+      <action application="conference" data="$1-${domain_name}@default"/>
+      <action application="hangup" />
+    </condition>
+ </extension>
+
 </context>

@@ -51,8 +51,6 @@ WORKDIR /ban-fs-mod
 COPY ./docker/conf/ ./conf/
 COPY ./docker/modules.conf /usr/src/freeswitch
 COPY ./mod_banafo_transcribe/ /usr/src/freeswitch/src/mod/asr_tts/mod_banafo_transcribe/
-COPY ./docker/run-re6-core.sh /ban-fs-mod/
-RUN chmod +x /ban-fs-mod/run-re6-core.sh
 
 RUN cd /usr/src/freeswitch && \
 sed -i '/src\/mod\/asr_tts\/mod_tts_commandline\/Makefile/a\\t\tsrc\/mod\/asr_tts\/mod_banafo_transcribe\/Makefile' configure.ac
@@ -62,7 +60,7 @@ RUN cd /usr/src/freeswitch && ./bootstrap.sh -j
 RUN cd /usr/src/freeswitch && ./configure
 RUN cd /usr/src/freeswitch && make -j`nproc` && make install
 
-#RUN cd /usr/src/freeswitch && make sounds-install && make moh-install
+RUN cd /usr/src/freeswitch && make sounds-install && make moh-install
 
 # copy Banafo setup to the FreeSWITCH
 RUN rm -fvR /usr/local/freeswitch/conf/

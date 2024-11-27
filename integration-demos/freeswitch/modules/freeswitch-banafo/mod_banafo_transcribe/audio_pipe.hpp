@@ -15,6 +15,11 @@ namespace banafo {
 
 class AudioPipe {
 public:
+  enum EventCallbackType_t {
+    READ_EVENT_CB,
+    WRITE_EVENT_CB,
+    EXT_EVENT_CB
+  };
   enum LwsState_t {
     LWS_CLIENT_IDLE,
     LWS_CLIENT_CONNECTING,
@@ -31,7 +36,7 @@ public:
     MESSAGE
   };
   typedef void (*log_emit_function)(int level, const char *line);
-  typedef void (*notifyHandler_t)(const char *sessionId, NotifyEvent_t event, const char* message, bool finished);
+  typedef void (*notifyHandler_t)(const char *sessionId, NotifyEvent_t event, const char* message, bool finished,EventCallbackType_t type);
 
   struct lws_per_vhost_data {
     struct lws_context *context;
@@ -45,7 +50,7 @@ public:
 
   // constructor
   AudioPipe(const char* uuid, const char* host, unsigned int port, unsigned int prot,const char* path, 
-    size_t bufLen, size_t minFreespace, const char* apiKey, notifyHandler_t callback);
+    size_t bufLen, size_t minFreespace, const char* apiKey, notifyHandler_t callback, EventCallbackType_t ebc_type);
   ~AudioPipe();
 
   LwsState_t getLwsState(void) { return m_state; }
@@ -54,6 +59,7 @@ public:
   }
   void connect(void);
   void bufferForSending(const char* text);
+  void listForSending(const char* text);
   size_t binarySpaceAvailable(void) {
     return m_audio_buffer_max_len - m_audio_buffer_write_offset;
   }
@@ -79,6 +85,7 @@ public:
   void waitForClose();
   void setClosed() { m_promise.set_value(); }
   bool isFinished() { return m_finished;}
+  EventCallbackType_t isECBType() {return m_ecb_type; }
 
   // no default constructor or copying
   AudioPipe() = delete;
@@ -121,6 +128,7 @@ private:
   unsigned int m_port;
   std::string m_path;
   std::string m_metadata;
+  std::list<std::string> m_msg_list;
   std::mutex m_text_mutex;
   std::mutex m_audio_mutex;
   int m_sslFlags;
@@ -134,6 +142,7 @@ private:
   size_t m_recv_buf_len;
   struct lws_per_vhost_data* m_vhd;
   notifyHandler_t m_callback;
+  EventCallbackType_t m_ecb_type;
   log_emit_function m_logger;
   std::string m_apiKey;
   bool m_gracefulShutdown;

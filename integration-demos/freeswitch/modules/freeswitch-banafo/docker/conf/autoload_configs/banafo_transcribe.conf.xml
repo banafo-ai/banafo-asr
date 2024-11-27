@@ -15,29 +15,24 @@
 
 		<!-- Banafo ASR server sample_rate -->
 		<param name="sample_rate" value="16000"/>
-	
-		<!-- json,text -->
-		<param name="result_mode" value="json"/>
 
 		<!-- Callback URL -->
 		<param name="callback_url" value="ws://127.0.0.1:8000"/>
 
-		<!-- sample rate will send to the Banafo ASR server as header (first 4 bytes) -->
-		<param name="send_sample_rate" value="no"/>
+		<!-- ro, wo, rw -->
+		<param name="catched_channels" value="ro"/>
 	</profile>
 		<profile name="en-US">
 		<param name="host" value="app.banafo.ai"/>
 		<param name="port" value="443"/>
 		<param name="prot" value="wss"/>
 		<param name="sample_rate" value="16000"/>
-		<param name="result_mode" value="json"/> 
 	</profile>
 	<profile name="bg">
 		<param name="host" value="localhost"/>
 		<param name="port" value="6007"/>
 		<param name="prot" value="wss"/>
 		<param name="sample_rate" value="8000"/>
-		<param name="result_mode" value="json"/>
 	</profile>
   </profiles>
 </configuration>

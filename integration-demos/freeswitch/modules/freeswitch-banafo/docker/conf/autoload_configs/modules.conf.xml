@@ -11,7 +11,7 @@
     <load module="mod_dptools"/>
     <load module="mod_dialplan_xml"/>
 
-<!--    <load module="mod_conference"/>-->
+    <load module="mod_conference"/>
     <load module="mod_voicemail"/>
 <!--    <load module="mod_voicemail_ivr"/> -->
 

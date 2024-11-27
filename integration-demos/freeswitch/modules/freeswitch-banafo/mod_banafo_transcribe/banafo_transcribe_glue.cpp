@@ -34,61 +34,24 @@ namespace {
   static unsigned int idxCallCount = 0;
   static uint32_t playCount = 0;
 
-  /* banafo model / tier defaults by language */
-  struct LanguageInfo {
-      std::string tier;
-      std::string model;
-  };
-
-  static const std::unordered_map<std::string, LanguageInfo> languageLookupTable = {
-      {"zh", {"base", "general"}},
-      {"zh-CN", {"base", "general"}},
-      {"zh-TW", {"base", "general"}},
-      {"da", {"enhanced", "general"}},
-      {"en", {"nova", "phonecall"}},
-      {"en-US", {"nova", "phonecall"}},
-      {"en-AU", {"nova", "general"}},
-      {"en-GB", {"nova", "general"}},
-      {"en-IN", {"nova", "general"}},
-      {"en-NZ", {"nova", "general"}},
-      {"nl", {"enhanced", "general"}},
-      {"fr", {"enhanced", "general"}},
-      {"fr-CA", {"base", "general"}},
-      {"de", {"enhanced", "general"}},
-      {"hi", {"enhanced", "general"}},
-      {"hi-Latn", {"base", "general"}},
-      {"id", {"base", "general"}},
-      {"ja", {"enhanced", "general"}},
-      {"ko", {"enhanced", "general"}},
-      {"no", {"enhanced", "general"}},
-      {"pl", {"enhanced", "general"}},
-      {"pt", {"enhanced", "general"}},
-      {"pt-BR", {"enhanced", "general"}},
-      {"pt-PT", {"enhanced", "general"}},
-      {"ru", {"base", "general"}},
-      {"es", {"nova", "general"}},
-      {"es-419", {"nova", "general"}},
-      {"sv", {"enhanced", "general"}},
-      {"ta", {"enhanced", "general"}},
-      {"tr", {"base", "general"}},
-      {"uk", {"base", "general"}}
-  };
-
-  static bool getLanguageInfo(const std::string& language, LanguageInfo& info) {
-      auto it = languageLookupTable.find(language);
-      if (it != languageLookupTable.end()) {
-          info = it->second;
-          return true;
-      }
-      return false;
-  }
-
-  static const char* emptyTranscript = "{\"alternatives\":[{\"transcript\":\"\",\"confidence\":0.0,\"words\":[]}]}";
+  static const char* emptyTranscript = "{\"text\": \"\", \"type\": \"";
 
   static void reaper(private_t *tech_pvt) {
     std::shared_ptr<banafo::AudioPipe> pAp;
-    pAp.reset((banafo::AudioPipe *)tech_pvt->pAudioPipe);
-    tech_pvt->pAudioPipe = nullptr;
+    banafo::AudioPipe *tmpPtr;
+
+    if (tech_pvt->pAudioPipeR) {
+      tmpPtr = (banafo::AudioPipe *)tech_pvt->pAudioPipeR;
+    }
+
+    if (tech_pvt->pAudioPipeW) {
+      tmpPtr = (banafo::AudioPipe *)tech_pvt->pAudioPipeW;
+    }
+
+    pAp.reset(tmpPtr);
+    tech_pvt->pAudioPipeR = nullptr;
+    tech_pvt->pAudioPipeW = nullptr;
+    tech_pvt->pCallBack = nullptr;
 
     std::thread t([pAp, tech_pvt]{
       pAp->finish();
@@ -101,15 +64,21 @@ namespace {
   static void destroy_tech_pvt(private_t *tech_pvt) {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "%s (%u) destroy_tech_pvt\n", tech_pvt->sessionId, tech_pvt->id);
     if (tech_pvt) {
-      if (tech_pvt->pAudioPipe) {
-        banafo::AudioPipe* p = (banafo::AudioPipe *) tech_pvt->pAudioPipe;
+      if (tech_pvt->pAudioPipeR) {
+        banafo::AudioPipe* p = (banafo::AudioPipe *) tech_pvt->pAudioPipeR;
         delete p;
-        tech_pvt->pAudioPipe = nullptr;
+        tech_pvt->pAudioPipeR = nullptr;
+      }
+
+      if (tech_pvt->pAudioPipeW) {
+        banafo::AudioPipe* p = (banafo::AudioPipe *) tech_pvt->pAudioPipeW;
+        delete p;
+        tech_pvt->pAudioPipeW = nullptr;
       }
 
       if (tech_pvt->pCallBack) {
         banafo::AudioPipe* cb = (banafo::AudioPipe *) tech_pvt->pCallBack;
-        //delete cb; ??? why is it crashed ???
+        delete cb;
         tech_pvt->pCallBack = nullptr;
       }
 
@@ -118,6 +87,10 @@ namespace {
           tech_pvt->resampler = NULL;
       }
 
+      /*if (tech_pvt->call_info_ptr) {
+        free(tech_pvt->call_info_ptr);
+        tech_pvt->call_info_ptr = NULL;
+      }*/
       /*
       if (tech_pvt->vad) {
         switch_vad_destroy(&tech_pvt->vad);
@@ -152,7 +125,6 @@ namespace {
     switch_channel_t *channel = switch_core_session_get_channel(session);
     const char *var ;
     std::ostringstream oss;
-    //LanguageInfo info;
 
     if (var = switch_channel_get_variable(channel, "BANAFO_API_KEY")) {
       oss << BANAFO_API_PATH <<  "apiKey=";
@@ -175,7 +147,7 @@ namespace {
    return path;
   }
 
-  static void eventCallback(const char* sessionId, banafo::AudioPipe::NotifyEvent_t event, const char* message, bool finished) {
+  static void eventCallback(const char* sessionId, banafo::AudioPipe::NotifyEvent_t event, const char* message, bool finished,banafo::AudioPipe::EventCallbackType_t ecb_type) {
     switch_core_session_t* session = switch_core_session_locate(sessionId);
     if (session) {
       switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -183,6 +155,7 @@ namespace {
       if (bug) {
         private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
         if (tech_pvt) {
+          call_info_t *call_info_ptr = tech_pvt->call_info_ptr;
           switch (event) {
             case banafo::AudioPipe::CONNECT_SUCCESS:
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "connection successful\n");
@@ -193,20 +166,23 @@ namespace {
               // first thing: we can no longer access the AudioPipe
               std::stringstream json;
               json << "{\"reason\":\"" << message << "\"}";
-              tech_pvt->pAudioPipe = nullptr;
+              if (ecb_type == banafo::AudioPipe::READ_EVENT_CB) tech_pvt->pAudioPipeR = nullptr;
+              if (ecb_type == banafo::AudioPipe::WRITE_EVENT_CB) tech_pvt->pAudioPipeW = nullptr;
               tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_CONNECT_FAIL, (char *) json.str().c_str(), tech_pvt->bugname, finished);
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "connection failed: %s\n", message);
             }
             break;
             case banafo::AudioPipe::CONNECTION_DROPPED:
               // first thing: we can no longer access the AudioPipe
-              tech_pvt->pAudioPipe = nullptr;
+              if (ecb_type == banafo::AudioPipe::READ_EVENT_CB) tech_pvt->pAudioPipeR = nullptr;
+              if (ecb_type == banafo::AudioPipe::WRITE_EVENT_CB) tech_pvt->pAudioPipeW = nullptr;
               tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_DISCONNECT, NULL, tech_pvt->bugname, finished);
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connection dropped from far end\n");
             break;
             case banafo::AudioPipe::CONNECTION_CLOSED_GRACEFULLY:
               // first thing: we can no longer access the AudioPipe
-              tech_pvt->pAudioPipe = nullptr;
+              if (ecb_type == banafo::AudioPipe::READ_EVENT_CB) tech_pvt->pAudioPipeR = nullptr;
+              if (ecb_type == banafo::AudioPipe::WRITE_EVENT_CB) tech_pvt->pAudioPipeW = nullptr;
               switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connection closed gracefully\n");
             break;
             case banafo::AudioPipe::MESSAGE:
@@ -217,53 +193,42 @@ namespace {
               else {
                 tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_RESULTS, message, tech_pvt->bugname, finished);
                 if(mod_banafo_transcribe_globals.debug) {
-                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "banafo message: %s\n", message);
+                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, 
+                                  "banafo message (full) from the Banafo ASR server: %s\n", message);
                 }
                 std::string msg = message;
-                std::string type;
-                mod_banafo_transcribe_conn_t *bptr = tech_pvt->banafo_conn;
-                result_mode_t result_mode = text;
                 banafo::AudioPipe *pCallBack = static_cast<banafo::AudioPipe *>(tech_pvt->pCallBack);
 
                 if (strcmp(msg.c_str(), "Done!") == 0) {
                   switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "received 'Done!' by Banafo ASR server\n");
                 }
 
-                if (bptr == NULL) {
-                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "banafo_conn pointer is NULL\n");
-                } else {
-                  result_mode = bptr->result_mode;
-                }
-
                 if (pCallBack) {
                   // send transcriptions to the Banafo proxy (callback_url)
-                  const char* text = msg.c_str();
-                  pCallBack->bufferForSending(text);
-                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "send '%s' [%d] to the Banafo proxy!\n", text, strlen(text));
-                }
+                  std::stringstream json;
 
-                if (result_mode == text) {
-                  cJSON* json = parse_json(session, msg, type) ;
-                  if (json) {
-                    cJSON* tmp_json = cJSON_GetObjectItem(json, "segment");
-                    int segm_num = tmp_json->valueint;
+                  json << "{\"call_uuid\":\"" << sessionId << "\",";
 
-                    tmp_json = cJSON_GetObjectItem(json, "type");
-                    const char* type = tmp_json->valuestring;
-
-                    tmp_json = cJSON_GetObjectItem(json, "text");
-                    const char* txt = tmp_json->valuestring;
-
-                    if((strlen(txt) > 0) && (strcmp(type,"final") == 0)) {
-                      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,
-                                        "[TEXT],transcribe[%d]: %s [%d]\n",segm_num,txt,strlen(txt));
-                    }
-                    cJSON_Delete(json);
+                  if (ecb_type == banafo::AudioPipe::READ_EVENT_CB) {
+                    json << "\"src\":\"" << call_info_ptr->src << "\",";
+                    json << "\"dst\":\"" << call_info_ptr->dst << "\",";
+                    json << "\"type\":\"local\",";
                   }
-                } else if (result_mode == json) {
-                    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, 
-                                        "[JSON],banafo message: %s\n", message);
+
+                  if (ecb_type == banafo::AudioPipe::WRITE_EVENT_CB) {
+                    json << "\"src\":\"" << call_info_ptr->dst << "\",";
+                    json << "\"dst\":\"" << call_info_ptr->src << "\",";
+                    json << "\"type\":\"remote\",";
+                  }
+
+                  json << "\"timestamp\": " << time(NULL) << ",";
+                  json << "\"original_msg\": \"" << msg.c_str() << "\"}";
+
+                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "[JSON-CB], %s\n", json.str().c_str());
+
+                  pCallBack->listForSending(json.str().c_str());
                 }
+
               }
             }
             break;
@@ -323,6 +288,7 @@ namespace {
     int err;
     int desiredSampling;
     void *vptr = NULL;
+    const char *var ;
     mod_banafo_transcribe_conn_t *ptr = NULL;
     switch_codec_implementation_t read_impl;
     switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -334,9 +300,8 @@ namespace {
       if (vptr != NULL) {
         ptr = (mod_banafo_transcribe_conn_t *)vptr;
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-                          "host: %s, port: %d, prot: %d, result_mode: %d, sample_rate: %d, send_sample_rate: %d, callback_url: %s;\n",
-                          ptr->banafo_asr_hostname, ptr->banafo_asr_port, ptr->prot, ptr->result_mode, ptr->sample_rate,
-                          ptr->send_sample_rate, ptr->callback_url);
+                          "host: %s, port: %d, prot: %d, sample_rate: %d, callback_url: %s;\n",
+                          ptr->banafo_asr_hostname, ptr->banafo_asr_port, ptr->prot, ptr->sample_rate,ptr->callback_url);
       } else {
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR,"the profile is not found!");
         return SWITCH_STATUS_FALSE;
@@ -363,21 +328,54 @@ namespace {
     tech_pvt->channels = channels;
     tech_pvt->id = ++idxCallCount;
     tech_pvt->buffer_overrun_notified = 0;
-    tech_pvt->is_started = 0;
 
     /* is it correct for all codec variants ???? */
     size_t buflen = LWS_PRE + (FRAME_SIZE_8000 * desiredSampling / 8000 * channels * 1000 / RTP_PACKETIZATION_PERIOD * nAudioBufferSecs);
 
-    const char* apiKey = "";
-
-    banafo::AudioPipe* ap = new banafo::AudioPipe(tech_pvt->sessionId, tech_pvt->host, tech_pvt->port, ptr->prot,tech_pvt->path,
-        buflen, read_impl.decoded_bytes_per_packet, apiKey, eventCallback);
-    if (!ap) {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe\n");
+    call_info_t* call_info_ptr = (call_info_t *) switch_core_session_alloc(session, sizeof(call_info_t));
+    //call_info_t* call_info_ptr = (call_info_t *) malloc(sizeof(call_info_t));
+    if (!call_info_ptr) {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory!\n");
       return SWITCH_STATUS_FALSE;
     }
 
-    tech_pvt->pAudioPipe = static_cast<void *>(ap);
+    if (var = switch_channel_get_variable(channel, "sip_from_user")) {
+      strncpy(call_info_ptr->src, var, sizeof(var));
+    }
+
+    if (var = switch_channel_get_variable(channel, "sip_to_user")) {
+      strncpy(call_info_ptr->dst, var, sizeof(var));
+    }
+
+    tech_pvt->call_info_ptr = call_info_ptr;
+
+    const char* apiKey = "";
+
+    if ((ptr->channel_mode == read_mode)||(ptr->channel_mode == rw_mode)) {
+      banafo::AudioPipe* ap_read = new banafo::AudioPipe(tech_pvt->sessionId, tech_pvt->host, tech_pvt->port, ptr->prot,tech_pvt->path,
+          buflen, read_impl.decoded_bytes_per_packet, apiKey, eventCallback, banafo::AudioPipe::READ_EVENT_CB);
+      if (!ap_read) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe\n");
+        return SWITCH_STATUS_FALSE;
+      }
+
+      tech_pvt->pAudioPipeR = static_cast<void *>(ap_read);
+    } else {
+      tech_pvt->pAudioPipeR = nullptr;
+    }
+
+    if ((ptr->channel_mode == write_mode)||(ptr->channel_mode == rw_mode)) {
+      banafo::AudioPipe* ap_write = new banafo::AudioPipe(tech_pvt->sessionId, tech_pvt->host, tech_pvt->port, ptr->prot,tech_pvt->path,
+          buflen, read_impl.decoded_bytes_per_packet, apiKey, eventCallback, banafo::AudioPipe::WRITE_EVENT_CB);
+      if (!ap_write) {
+        switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe\n");
+        return SWITCH_STATUS_FALSE;
+      }
+
+      tech_pvt->pAudioPipeW = static_cast<void *>(ap_write);
+    } else {
+      tech_pvt->pAudioPipeW = nullptr;
+    }
 
     switch_mutex_init(&tech_pvt->mutex, SWITCH_MUTEX_NESTED, switch_core_session_get_pool(session));
 
@@ -389,7 +387,7 @@ namespace {
                           cb_url.cb_host, cb_url.cb_port, cb_url.cb_prot, cb_url.cb_path);
 
         banafo::AudioPipe* cb = new banafo::AudioPipe(tech_pvt->sessionId, cb_url.cb_host, cb_url.cb_port, cb_url.cb_prot, cb_url.cb_path,
-            buflen, read_impl.decoded_bytes_per_packet, apiKey, eventCallback);
+            buflen, read_impl.decoded_bytes_per_packet, apiKey, eventCallback, banafo::AudioPipe::EXT_EVENT_CB);
         if (!cb) {
           switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error allocating AudioPipe (CallBack!)\n");
           return SWITCH_STATUS_FALSE;
@@ -436,17 +434,6 @@ namespace {
 
 
 extern "C" {
-  int s16le_to_f32le(float *_float32,int16_t *_int16,char *_buf,size_t _buf_size) {
-    int c;
-    int samples = _buf_size/2;
-
-    memcpy(_int16,_buf,_buf_size);
-    for(c=0;c < samples;c++) {
-      _float32[c] = ((float)_int16[c]) / 32768;
-    }
-    return c;
-  }
-
   switch_status_t banafo_transcribe_init() {
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_banafo_transcribe: audio buffer (in secs):    %d secs\n", nAudioBufferSecs);
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod_banafo_transcribe: lws service threads:       %d\n", nServiceThreads);
@@ -490,6 +477,15 @@ extern "C" {
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory!\n");
       return SWITCH_STATUS_FALSE;
     }
+
+    call_info_t* call_info_ptr = (call_info_t *) switch_core_session_alloc(session, sizeof(call_info_t));
+    if (!call_info_ptr) {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "error allocating memory!\n");
+      return SWITCH_STATUS_FALSE;
+    }
+
+    tech_pvt->call_info_ptr = call_info_ptr;
+
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "channels: %d\n",channels);
     if (SWITCH_STATUS_SUCCESS != fork_data_init(tech_pvt, session, samples_per_second, channels, lang, interim, bugname, responseHandler)) {
       destroy_tech_pvt(tech_pvt);
@@ -498,16 +494,28 @@ extern "C" {
 
     if (mod_banafo_transcribe_globals.debug) {
       char filename[256] = "";
-      sprintf(filename, "/tmp/fs_debug_%s_%d_%d.pcm", read_impl.iananame, read_impl.samples_per_second, (int)time(NULL));
+      sprintf(filename, "/tmp/fs_debug_r_%s_%d_%d.pcm", read_impl.iananame, read_impl.samples_per_second, (int)time(NULL));
       tech_pvt->fp = fopen( filename,"w");
+      memset(filename,0,256);
+      sprintf(filename, "/tmp/fs_debug_w_%s_%d_%d.pcm", read_impl.iananame, read_impl.samples_per_second, (int)time(NULL));
+      tech_pvt->dp = fopen(filename,"w");
     }
 
     *ppUserData = tech_pvt;
 
-    banafo::AudioPipe *pAudioPipe = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipe);
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connecting now\n");
-    pAudioPipe->connect();
-    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connection in progress\n");
+    if (tech_pvt->pAudioPipeR) {
+      banafo::AudioPipe *pAudioPipeR = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipeR);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connecting now (R)\n");
+      pAudioPipeR->connect();
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connection in progress (R)\n");
+    }
+
+    if (tech_pvt->pAudioPipeW) {
+      banafo::AudioPipe *pAudioPipeW = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipeW);
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connecting now (W)\n");
+      pAudioPipeW->connect();
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "connection in progress (W)\n");
+    }
 
     if (tech_pvt->pCallBack) {
       banafo::AudioPipe *pCallBack = static_cast<banafo::AudioPipe *>(tech_pvt->pCallBack);
@@ -526,38 +534,48 @@ extern "C" {
       switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "banafo_transcribe_session_stop: no bug - websocket conection already closed\n");
       return SWITCH_STATUS_FALSE;
     }
-    private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
-    uint32_t id = tech_pvt->id;
 
+    private_t* tech_pvt = (private_t*) switch_core_media_bug_get_user_data(bug);
+    if (!tech_pvt) {
+      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "tech_pvt is NULL!!!\n");
+      return SWITCH_STATUS_FALSE;
+    }
+
+    uint32_t id = tech_pvt->id;
     switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "(%u) banafo_transcribe_session_stop\n", id);
 
-    if (!tech_pvt) return SWITCH_STATUS_FALSE;
-
-    banafo::AudioPipe *pAudioPipe = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipe);
-    if (pAudioPipe) {
+    if (tech_pvt->pAudioPipeR) {
+      banafo::AudioPipe *pAudioPipeR = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipeR);
       if (tech_pvt->banafo_conn != NULL) {
-        pAudioPipe->finish();
-        pAudioPipe->close();
+        pAudioPipeR->finish();
+        pAudioPipeR->close();
       }
     }
 
-    banafo::AudioPipe *pCallBack = static_cast<banafo::AudioPipe *>(tech_pvt->pCallBack);
-    if (pCallBack) {
-        pCallBack->close();
+    if (tech_pvt->pAudioPipeW) {
+      banafo::AudioPipe *pAudioPipeW = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipeW);
+      if (tech_pvt->banafo_conn != NULL) {
+        pAudioPipeW->finish();
+        pAudioPipeW->close();
+      }
     }
 
+    if (tech_pvt->pCallBack) {
+      banafo::AudioPipe *pCallBack = static_cast<banafo::AudioPipe *>(tech_pvt->pCallBack);
+      //pCallBack->finish();
+      pCallBack->close();
+    }
+
+    reaper(tech_pvt);
+
     if (tech_pvt->fp != NULL) fclose(tech_pvt->fp);
+    if (tech_pvt->dp != NULL) fclose(tech_pvt->dp);
 
     // close connection and get final responses
     switch_mutex_lock(tech_pvt->mutex);
     switch_channel_set_private(channel, bugname, NULL);
     if (!channelIsClosing) switch_core_media_bug_remove(session, &bug);
 
-    if (pAudioPipe) { 
-      reaper(tech_pvt);
-    } else {
-      switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "reaper() is not started\n");
-    }
     destroy_tech_pvt(tech_pvt);
     switch_mutex_unlock(tech_pvt->mutex);
     switch_mutex_destroy(tech_pvt->mutex);
@@ -567,9 +585,16 @@ extern "C" {
   }
 
 switch_bool_t banafo_transcribe_frame(switch_core_session_t *session, switch_media_bug_t *bug) {
-    char *tmp_ptr;
     switch_frame_t frame = { 0 };
     uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
+
+    size_t available;
+    size_t availableW;
+
+    int16_t x;
+    size_t bytes_written_float;
+    float tmp_left[SWITCH_RECOMMENDED_BUFFER_SIZE];
+    float tmp_right[SWITCH_RECOMMENDED_BUFFER_SIZE];
 
     frame.data = data;
     frame.buflen = SWITCH_RECOMMENDED_BUFFER_SIZE;
@@ -579,67 +604,80 @@ switch_bool_t banafo_transcribe_frame(switch_core_session_t *session, switch_med
     if (!tech_pvt) return SWITCH_TRUE;
 
     if (switch_mutex_trylock(tech_pvt->mutex) == SWITCH_STATUS_SUCCESS) {
-      if (!tech_pvt->pAudioPipe) {
-        switch_mutex_unlock(tech_pvt->mutex);
-        return SWITCH_TRUE;
-      }
-      banafo::AudioPipe *pAudioPipe = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipe);
-      if (pAudioPipe->getLwsState() != banafo::AudioPipe::LWS_CLIENT_CONNECTED) {
-        switch_mutex_unlock(tech_pvt->mutex);
-        return SWITCH_TRUE;
+      banafo::AudioPipe *pAudioPipeR = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipeR);
+      if (pAudioPipeR) {
+        if (pAudioPipeR->getLwsState() != banafo::AudioPipe::LWS_CLIENT_CONNECTED) {
+          switch_mutex_unlock(tech_pvt->mutex);
+          return SWITCH_TRUE;
+        }
+
+        pAudioPipeR->lockAudioBuffer();
+        available = pAudioPipeR->binarySpaceAvailable();
       }
 
-      pAudioPipe->lockAudioBuffer();
-      size_t available = pAudioPipe->binarySpaceAvailable();
+      banafo::AudioPipe *pAudioPipeW = static_cast<banafo::AudioPipe *>(tech_pvt->pAudioPipeW);
+      if (pAudioPipeW) {
+        if (pAudioPipeW->getLwsState() != banafo::AudioPipe::LWS_CLIENT_CONNECTED) {
+          switch_mutex_unlock(tech_pvt->mutex);
+          return SWITCH_TRUE;
+        }
+
+        pAudioPipeW->lockAudioBuffer();
+        availableW = pAudioPipeW->binarySpaceAvailable();
+      }
+
       if (NULL == tech_pvt->resampler) {
-        while (true) {
-          // check if buffer would be overwritten; dump packets if so
-          if (available < pAudioPipe->binaryMinSpace()) {
-            if (!tech_pvt->buffer_overrun_notified) {
-              tech_pvt->buffer_overrun_notified = 1;
-              tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
-            }
-            switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
-              tech_pvt->id);
-            pAudioPipe->binaryWritePtrResetToZero();
-
-            frame.data = pAudioPipe->binaryWritePtr();
-            frame.buflen = available = pAudioPipe->binarySpaceAvailable();
-          }
-
-          switch_status_t rv = switch_core_media_bug_read(bug, &frame, SWITCH_TRUE);
-          if (rv != SWITCH_STATUS_SUCCESS) break;
+        while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
           if (frame.datalen) {
-            int16_t _int16[SWITCH_RECOMMENDED_BUFFER_SIZE/2] = {0};
-            float _float32[SWITCH_RECOMMENDED_BUFFER_SIZE/2] = {0};
-            int c = s16le_to_f32le(_float32,_int16,(char *)frame.data,frame.datalen);
+            memset(tmp_left, 0, SWITCH_RECOMMENDED_BUFFER_SIZE);
+            memset(tmp_right, 0, SWITCH_RECOMMENDED_BUFFER_SIZE);
 
-            if (tech_pvt->fp != NULL) fwrite(_float32,1,(sizeof(float)*c),tech_pvt->fp);
-            tmp_ptr = pAudioPipe->binaryWritePtr();
-            memcpy(tmp_ptr,_float32,(sizeof(float)*c));
+            if (tech_pvt->channels == 2) {
+              int16_t *y = (int16_t *) frame.data;
+              for (x=0; x < (frame.datalen/2); x++) {
+                tmp_left[x] = (float) *(y) / 32768;
+                y++;
+                tmp_right[x] = (float) *(y) / 32768;
+                y++;
+              }
 
-            pAudioPipe->binaryWritePtrAdd((sizeof(float)*c));
-            frame.buflen = available = pAudioPipe->binarySpaceAvailable();
+              bytes_written_float = (x * sizeof(float));
+
+              if (tech_pvt->fp != NULL) fwrite(tmp_left, 1, bytes_written_float, tech_pvt->fp);
+              if (tech_pvt->dp != NULL) fwrite(tmp_right, 1, bytes_written_float, tech_pvt->dp);
+            }
+
+            if (pAudioPipeR) {
+              memcpy(pAudioPipeR->binaryWritePtr(), tmp_left, bytes_written_float);
+              pAudioPipeR->binaryWritePtrAdd(bytes_written_float);
+
+              if (available < pAudioPipeR->binaryMinSpace()) {
+                if (!tech_pvt->buffer_overrun_notified) {
+                  tech_pvt->buffer_overrun_notified = 1;
+                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets (R)!\n", tech_pvt->id);
+                  tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
+                }
+                break;
+              }
+            }
+
+            if (pAudioPipeW) {
+              memcpy(pAudioPipeW->binaryWritePtr(), tmp_right, bytes_written_float);
+              pAudioPipeW->binaryWritePtrAdd(bytes_written_float);
+
+              if (availableW < pAudioPipeW->binaryMinSpace()) {
+                if (!tech_pvt->buffer_overrun_notified) {
+                  tech_pvt->buffer_overrun_notified = 1;
+                  switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets (W)!\n", tech_pvt->id);
+                  tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
+                }
+                break;
+              }
+            }
           }
         }
       } else {
         spx_int16_t spx_data[SWITCH_RECOMMENDED_BUFFER_SIZE];
-        float _float32 = 0;
-
-        if (!tech_pvt->is_started) {
-          if (tech_pvt->banafo_conn != NULL) {
-            if(tech_pvt->banafo_conn->send_sample_rate) {
-              tmp_ptr = pAudioPipe->binaryWritePtr();
-              int32_t sample_rate = tech_pvt->banafo_conn->sample_rate;
-              char _sample_rate[32] = {0};
-              memcpy(_sample_rate,&sample_rate,sizeof(sample_rate));
-              memcpy(tmp_ptr,_sample_rate,sizeof(_sample_rate));
-              tech_pvt->is_started = 1;
-              pAudioPipe->binaryWritePtrAdd(sizeof(_sample_rate));
-              switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE, "send sample rate: %d\n",sample_rate);
-            }
-          }
-        }
 
         while (switch_core_media_bug_read(bug, &frame, SWITCH_TRUE) == SWITCH_STATUS_SUCCESS) {
           if (frame.datalen) {
@@ -652,33 +690,64 @@ switch_bool_t banafo_transcribe_frame(switch_core_session_t *session, switch_med
               // bytes written = num samples * 2 * num channels
               size_t bytes_written = out_len << tech_pvt->channels;
 
-              tmp_ptr = pAudioPipe->binaryWritePtr();
-              for(int i=0;i<out_len;i++) {
-                _float32 = ((float) spx_data[i]) / 32768;
-                memcpy(tmp_ptr,&_float32,sizeof(_float32));
-                tmp_ptr = tmp_ptr + sizeof(_float32);
-              }
-              if (tech_pvt->fp != NULL) fwrite(tmp_ptr,1,(bytes_written*2),tech_pvt->fp);
+              memset(tmp_left, 0, SWITCH_RECOMMENDED_BUFFER_SIZE);
+              memset(tmp_right, 0, SWITCH_RECOMMENDED_BUFFER_SIZE);
 
-              pAudioPipe->binaryWritePtrAdd((bytes_written)*2);
-              available = pAudioPipe->binarySpaceAvailable();
-            }
-            if (available < pAudioPipe->binaryMinSpace()) {
-              if (!tech_pvt->buffer_overrun_notified) {
-                tech_pvt->buffer_overrun_notified = 1;
-                switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets!\n", 
-                  tech_pvt->id);
-                tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
+              if (tech_pvt->channels == 2) {
+                int16_t *y = (int16_t *) spx_data;
+                for (x=0; x < out_len; x++) {
+                  tmp_left[x] = (float) *(y) / 32768;
+                  y++;
+                  tmp_right[x] = (float) *(y) / 32768;
+                  y++;
+                }
+
+                bytes_written_float = (x * sizeof(float));
+
+                if (tech_pvt->fp != NULL) fwrite(tmp_left, 1, bytes_written_float, tech_pvt->fp);
+                if (tech_pvt->dp != NULL) fwrite(tmp_right, 1, bytes_written_float, tech_pvt->dp);
               }
-              break;
+
+              if (pAudioPipeR) {
+                memcpy(pAudioPipeR->binaryWritePtr(), tmp_left, bytes_written_float);
+                pAudioPipeR->binaryWritePtrAdd(bytes_written_float);
+
+                available = pAudioPipeR->binarySpaceAvailable();
+                if (available < pAudioPipeR->binaryMinSpace()) {
+                  if (!tech_pvt->buffer_overrun_notified) {
+                    tech_pvt->buffer_overrun_notified = 1;
+                    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets (R)!\n", tech_pvt->id);
+                    tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
+                  }
+                  break;
+                }
+              }
+
+              if (pAudioPipeW) {
+                memcpy(pAudioPipeW->binaryWritePtr(), tmp_right, bytes_written_float);
+                pAudioPipeW->binaryWritePtrAdd(bytes_written_float);
+
+                availableW = pAudioPipeW->binarySpaceAvailable();
+                if (availableW < pAudioPipeW->binaryMinSpace()) {
+                  if (!tech_pvt->buffer_overrun_notified) {
+                    tech_pvt->buffer_overrun_notified = 1;
+                    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "(%u) dropping packets (W)!\n", tech_pvt->id);
+                    tech_pvt->responseHandler(session, TRANSCRIBE_EVENT_BUFFER_OVERRUN, NULL, tech_pvt->bugname, 0);
+                  }
+                  break;
+                }
+              }
             }
           }
         }
       }
 
-      pAudioPipe->unlockAudioBuffer();
+      if (pAudioPipeR) pAudioPipeR->unlockAudioBuffer();
+      if (pAudioPipeW) pAudioPipeW->unlockAudioBuffer();
+
       switch_mutex_unlock(tech_pvt->mutex);
     }
+
     return SWITCH_TRUE;
   }
 }

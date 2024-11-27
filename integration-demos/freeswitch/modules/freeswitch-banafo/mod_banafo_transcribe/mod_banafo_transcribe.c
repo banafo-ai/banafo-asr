@@ -68,6 +68,19 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	switch_status_t status;
 	void *pUserData;
 
+	void *vptr = NULL;
+	mod_banafo_transcribe_conn_t *ptr = NULL;
+
+	if (mod_banafo_transcribe_globals.profiles != NULL) {
+		vptr = switch_core_hash_find(mod_banafo_transcribe_globals.profiles,lang);
+		if (vptr != NULL) {
+			ptr = (mod_banafo_transcribe_conn_t *)vptr;
+			if (ptr->channel_mode > 0) {
+				flags = SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_STEREO;
+			}
+		}
+	}
+
 	if (switch_channel_get_private(channel, MY_BUG_NAME)) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "removing bug from previous transcribe\n");
 		do_stop(session, bugname);
@@ -86,6 +99,9 @@ static switch_status_t start_capture(switch_core_session_t *session, switch_medi
 	}
 	switch_channel_set_private(channel, MY_BUG_NAME, bug);
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "added media bug for banafo transcribe\n");
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "checked media bug flags: read=%s, write=%s\n",
+						switch_test_flag(bug, SMBF_READ_STREAM) ? "yes" : "no",
+						switch_test_flag(bug, SMBF_WRITE_STREAM) ? "yes" : "no");
 
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -106,8 +122,25 @@ static switch_status_t do_stop(switch_core_session_t *session,  char* bugname)
 	return status;
 }
 
-static switch_status_t mod_banafo_transcribe_create_profile(char *profile_name,char *host,uint16_t port,prot_t prot,
-	result_mode_t mode,uint16_t sample_rate,uint8_t send_sample_rate, char *cb_url) {
+void mod_banafo_init_conn(mod_banafo_transcribe_conn_t *conn) {
+	if (conn != NULL) {
+		conn->banafo_asr_hostname = NULL;
+		conn->banafo_asr_port = 0;
+		conn->prot = wss;
+		conn->sample_rate = 16000;
+		conn->callback_url = NULL;
+		conn->channel_mode = 1;
+	}
+}
+
+void mod_banafo_print_profile(char *name, mod_banafo_transcribe_conn_t *read_cfg){
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
+		"name: %s, host: %s, port: %d, prot: %d, sample_rate: %d; cb_url: %s, ch_mode: %d\n",
+		name, read_cfg->banafo_asr_hostname, read_cfg->banafo_asr_port, read_cfg->prot, read_cfg->sample_rate, 
+		read_cfg->callback_url , read_cfg->channel_mode);
+}
+
+static switch_status_t mod_banafo_transcribe_create_profile(char *profile_name, mod_banafo_transcribe_conn_t *read_cfg) {
 	mod_banafo_transcribe_conn_t *conn = NULL;
 	switch_memory_pool_t *pool = NULL;
 	
@@ -115,13 +148,12 @@ static switch_status_t mod_banafo_transcribe_create_profile(char *profile_name,c
 	conn = switch_core_alloc(pool, sizeof(mod_banafo_transcribe_conn_t));
 
 	if (conn != NULL) {
-		conn->banafo_asr_hostname = host;
-		conn->banafo_asr_port = port ? port : 6007;
-		conn->prot = prot;
-		conn->result_mode = mode;
-		conn->sample_rate = sample_rate;
-		conn->send_sample_rate = send_sample_rate;
-		conn->callback_url = cb_url;
+		conn->banafo_asr_hostname = read_cfg->banafo_asr_hostname;
+		conn->banafo_asr_port = read_cfg->banafo_asr_port ? read_cfg->banafo_asr_port : 6006;
+		conn->prot = read_cfg->prot;
+		conn->sample_rate = read_cfg->sample_rate;
+		conn->callback_url = read_cfg->callback_url;
+		conn->channel_mode = read_cfg->channel_mode;
 
 		switch_core_hash_insert(mod_banafo_transcribe_globals.profiles, profile_name, (void *) conn);
 	} else {
@@ -134,6 +166,7 @@ static switch_status_t mod_banafo_transcribe_create_profile(char *profile_name,c
 static switch_status_t mod_banafo_transcribe_load_cfg() {
 	char *conf = "banafo_transcribe.conf";
 	switch_xml_t xml, cfg, profiles, profile, param, sys;
+	mod_banafo_transcribe_conn_t read_cfg;
 
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "Loading a Banafo module config\n");
 
@@ -155,59 +188,47 @@ static switch_status_t mod_banafo_transcribe_load_cfg() {
 
 	if ( (profiles = switch_xml_child(cfg, "profiles")) != NULL) {
 		for (profile = switch_xml_child(profiles, "profile"); profile; profile = profile->next) {
-			char *name=NULL, *tmp=NULL, *host=NULL, *cb_url=NULL;
-			uint16_t port = 0, sample_rate = 16000;
-			prot_t prot = wss;
-			uint8_t send_sample_rate = 0;
-			result_mode_t result_mode = text;
+			char *name=NULL, *tmp=NULL;
+			mod_banafo_init_conn(&read_cfg);
 
 			name = (char *)switch_xml_attr_soft(profile, "name");
 
 			for (param = switch_xml_child(profile, "param"); param; param = param->next) {
 				char *var = (char *) switch_xml_attr_soft(param, "name");
 				if ( ! strncmp(var, "host", 4) ) {
-					host = (char *) switch_xml_attr_soft(param, "value");
+					read_cfg.banafo_asr_hostname = (char *) switch_xml_attr_soft(param, "value");
 				} else if ( ! strncmp(var, "port", 4) ) {
-					port = atoi(switch_xml_attr_soft(param, "value"));
+					read_cfg.banafo_asr_port = atoi(switch_xml_attr_soft(param, "value"));
 				} else if ( ! strncmp(var, "sample_rate", 10) ) {
-					sample_rate = atoi(switch_xml_attr_soft(param, "value"));
+					read_cfg.sample_rate = atoi(switch_xml_attr_soft(param, "value"));
 				} else if ( ! strncmp(var, "prot", 4) ) {
 					tmp = (char *) switch_xml_attr_soft(param, "value");
 					if (strcmp(tmp,"ws")==0) {
-						prot = ws;
+						read_cfg.prot = ws;
 					} else if (strcmp(tmp,"wss")==0) {
-						prot = wss;
+						read_cfg.prot = wss;
 					} else {
-						prot = wss;
-					}
-				} else if ( ! strncmp(var, "result_mode", 11) ) {
-					tmp = (char *) switch_xml_attr_soft(param, "value");
-					if (strcmp(tmp,"text")==0) {
-						result_mode = text;
-					} else if (strcmp(tmp,"json")==0) {
-						result_mode = json;
-					} else {
-						result_mode = text;
-					}
-				} else if ( ! strncmp(var, "send_sample_rate", 16) ) {
-					tmp = (char *) switch_xml_attr_soft(param, "value");
-					if (strcmp(tmp,"yes")==0) {
-						send_sample_rate = 1;
-					} else {
-						send_sample_rate = 0;
+						read_cfg.prot = wss;
 					}
 				} else if ( ! strncmp(var, "callback_url", 12) ) {
-					cb_url = (char *) switch_xml_attr_soft(param, "value");
+					read_cfg.callback_url = (char *) switch_xml_attr_soft(param, "value");
+				} else if ( ! strncmp(var, "catched_channels", 16) ) {
+					tmp = (char *) switch_xml_attr_soft(param, "value");
+					if (strcmp(tmp,"ro")==0) {
+						read_cfg.channel_mode = read_mode;
+					} else if (strcmp(tmp,"wo")==0) {
+						read_cfg.channel_mode = write_mode;
+					} else if (strcmp(tmp,"rw")==0) {
+						read_cfg.channel_mode = rw_mode;
+					}
 				}
 			}
 
 			if(mod_banafo_transcribe_globals.debug) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE,
-								"name: %s, host: %s, port: %d, prot: %d, result_mode: %d, sample_rate: %d, send_sample_rate: %d; cb_url: %s\n",
-								name,host,port,prot,result_mode,sample_rate,send_sample_rate,cb_url);
+				mod_banafo_print_profile( name, &read_cfg);
 			}
 
-			mod_banafo_transcribe_create_profile(name,host,port,prot,result_mode,sample_rate,send_sample_rate,cb_url);
+			mod_banafo_transcribe_create_profile(name, &read_cfg);
 		}
 	}
 
@@ -220,7 +241,7 @@ SWITCH_STANDARD_API(banafo_transcribe_function)
 	char *mycmd = NULL, *argv[6] = { 0 };
 	int argc = 0;
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM /* | SMBF_WRITE_STREAM | SMBF_READ_PING */;
+	switch_media_bug_flag_t flags = 0; /*SMBF_READ_STREAM | SMBF_WRITE_STREAM | SMBF_READ_PING */;
 
 	if (!zstr(cmd) && (mycmd = strdup(cmd))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
@@ -273,7 +294,7 @@ SWITCH_STANDARD_APP(banafo_transcribe_app_function)
 	char *mycmd = NULL, *argv[6] = { 0 };
 	int argc = 0;
 	switch_status_t status = SWITCH_STATUS_FALSE;
-	switch_media_bug_flag_t flags = SMBF_READ_STREAM /* | SMBF_WRITE_STREAM | SMBF_READ_PING */;
+	switch_media_bug_flag_t flags = 0;
 
 	if (!zstr(data) && (mycmd = strdup(data))) {
 		argc = switch_separate_string(mycmd, ' ', argv, (sizeof(argv) / sizeof(argv[0])));
@@ -284,11 +305,10 @@ SWITCH_STANDARD_APP(banafo_transcribe_app_function)
       (!strcasecmp(argv[1], "start") && argc < 3) ||
       zstr(argv[0])) {
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, "Error with command %s %s %s.\n", data, argv[0], argv[1]);
-		//stream->write_function(stream, "-USAGE: %s\n", TRANSCRIBE_API_SYNTAX);
 		goto done;
 	} else {
 		switch_core_session_t *lsession = NULL;
-		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,"argv[0], %s ... %s %s",argv[0],argv[1],argv[2]); // dkokov
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_NOTICE,"argv[0], %s ... %s %s",argv[0],argv[1],argv[2]);
 		if ((lsession = switch_core_session_locate(argv[0]))) {
 			if (!strcasecmp(argv[1], "stop")) {
 				char *bugname = argc > 2 ? argv[2] : MY_BUG_NAME;
