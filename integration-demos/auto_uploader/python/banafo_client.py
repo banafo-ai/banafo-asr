@@ -18,10 +18,11 @@ HTTP_UPLOAD_API_URL = HTTP_API_URL + "/api/v1/file"
 HTTP_GET_API_URL = HTTP_API_URL + "/api/v1/transcripts"
 
 def generate_post_data(_wf_name,_lang):
+	file_name = os.path.basename(_wf_name)
 	if _lang is not None:
-		data = {"fileName": _wf_name,"languageCode": _lang}
+		data = {"fileName": file_name,"languageCode": _lang}
 	else:
-		data = {"fileName": _wf_name}
+		data = {"fileName": file_name}
 
 	return json.dumps(data)
 
@@ -37,7 +38,7 @@ def banafo_read_wav(filename):
 		samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768
 		return samples, f.getframerate()
 
-async def banafo_audio_stream_to_ws(uri, wf_name, wflag=False):
+async def banafo_audio_stream_to_ws(uri, wf_name, wflag=False, max_retries=5, retry_delay=10):
 	_uri = uri.split(":");
 
 	if 'wss' in _uri[0]:
@@ -47,24 +48,30 @@ async def banafo_audio_stream_to_ws(uri, wf_name, wflag=False):
 	else:
 		ssl_context = None
 
-	try:
-		async with websockets.connect(uri, ssl=ssl_context) as websocket:
-			if wflag:
-				rr = await websocket.recv()
-				auto_upl.logger.info(f"receive: {rr}")
+	for attempt in range(1, max_retries + 1):
+		try:
+			async with websockets.connect(uri, ssl=ssl_context) as websocket:
+				if wflag:
+					rr = await websocket.recv()
+					auto_upl.logger.info(f"receive: {rr}")
 
-			samples, rate = banafo_read_wav(wf_name)
-			buf = rate.to_bytes(4, byteorder="little") + (samples.size * 4).to_bytes(4, byteorder="little") + samples.tobytes()
+				samples, rate = banafo_read_wav(wf_name)
+				buf = rate.to_bytes(4, byteorder="little") + (samples.size * 4).to_bytes(4, byteorder="little") + samples.tobytes()
 
-			for i in range(0, len(buf), 1_000_000):
-				await websocket.send(buf[i:i + 1_000_000])
+				for i in range(0, len(buf), 1_000_000):
+					await websocket.send(buf[i:i + 1_000_000])
 	
-			resp = await websocket.recv()
-			await websocket.send("Done")
-			return get_result_only_text(resp)
-	except Exception as e:
-		auto_upl.logger.error(f"Error: {str(e)}", exc_info=True)
-		return None
+				resp = await websocket.recv()
+				await websocket.send("Done")
+				return get_result_only_text(resp)
+		except Exception as e:
+			auto_upl.logger.error(f"Attempt {attempt} failed with error: {str(e)}", exc_info=True)
+			if attempt < max_retries:
+				auto_upl.logger.info(f"Retrying in {retry_delay} seconds...")
+				await asyncio.sleep(retry_delay)
+			else:
+				auto_upl.logger.error("Max retries reached. Could not establish connection.")
+				return None
 
 async def banafo_api_upload_to_wss(_apiKey,_lang,_wf_name):
 	if _lang is None or (len(_lang) == 0):
@@ -75,7 +82,7 @@ async def banafo_api_upload_to_wss(_apiKey,_lang,_wf_name):
 
 	return await banafo_audio_stream_to_ws(uri, _wf_name, True)
 
-async def banafo_api_upload_to_http(_apikey,_lang,_wf_name):
+async def banafo_api_upload_to_http(_apikey, _lang, _wf_name, max_retries=5, retry_delay=10):
 	post_headers = {
 		"accept": "application/json",
 		"x-api-key": _apikey,
@@ -83,13 +90,23 @@ async def banafo_api_upload_to_http(_apikey,_lang,_wf_name):
 	}
 	post_data = generate_post_data(_wf_name,_lang)
 
-	response = requests.post(HTTP_UPLOAD_API_URL, headers=post_headers, data=post_data)
+	for attempt in range(1, max_retries + 1):
+		try:
+			response = requests.post(HTTP_UPLOAD_API_URL, headers=post_headers, data=post_data)
 
-	if response.status_code >= 200 and response.status_code < 300:
-		auto_upl.logger.info("Request POST was successful")
-	else:
-		auto_upl.logger.error(f"Request POST failed with status code: {response.status_code}, text: {response.text}")
-		return None
+			if response.status_code >= 200 and response.status_code < 300:
+				auto_upl.logger.info("Request POST was successful")
+				break
+			else:
+				auto_upl.logger.error(f"Request POST failed with status code: {response.status_code}, text: {response.text}")
+				return None
+		except Exception as e:
+			auto_upl.logger.error(f"Attempt {attempt} for POST failed with error: {str(e)}", exc_info=True)
+			if attempt == max_retries:
+				return None
+
+		auto_upl.logger.info(f"Retrying POST in {retry_delay} seconds...")
+		await asyncio.sleep(retry_delay)
 
 	response_data = response.json()
 	file_id = response_data.get("fileId", "")
@@ -102,14 +119,26 @@ async def banafo_api_upload_to_http(_apikey,_lang,_wf_name):
 		"x-start-byte": "0",
 	}
 	files = {"theFile": (os.path.basename(_wf_name), open(_wf_name, "rb"), "audio/x-wav")}
-	response = requests.put(puturl,headers = put_headers,files = files)
 
-	if response.status_code == 200:
-		auto_upl.logger.info("Request PUT was successful")
-		return file_id
-	else:
-		auto_upl.logger.error(f"Request PUT failed with status code: {response.status_code}, text: {response.text}")
-		return None
+	for attempt in range(1, max_retries + 1):
+		try:
+			response = requests.put(puturl,headers = put_headers,files = files)
+
+			if response.status_code == 200:
+				auto_upl.logger.info("Request PUT was successful")
+				return file_id
+			else:
+				auto_upl.logger.error(f"Request PUT failed with status code: {response.status_code}, text: {response.text}")
+				return None
+		except Exception as e:
+			auto_upl.logger.error(f"Attempt {attempt} for PUT failed with error: {str(e)}", exc_info=True)
+			if attempt == max_retries:
+				return None
+
+		auto_upl.logger.info(f"Retrying PUT in {retry_delay} seconds...")
+		await asyncio.sleep(retry_delay)
+
+	return None
 
 def banafo_api_result(api_key, file_id):
 	url = f"{HTTP_GET_API_URL}/{file_id}"

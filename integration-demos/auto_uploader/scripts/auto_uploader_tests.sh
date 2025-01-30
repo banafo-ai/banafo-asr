@@ -53,19 +53,17 @@ TESTS=(
     "-x pending"
     "-x success"
     "-x errors"
-    "-x delete"
     "-x insert --path=$tests_dst1 --api=$badApiKey --txt=$txt3 --http 1"
     "-x upload --log-type console --log-level debug"
     "-x pending"
     "-x success"
     "-x errors"
-    "-x delete"
     "-x get --api=$apiKey --log-level debug --log-type console"
     "-x pending"
     "-x success"
     "-x errors"
-    "-x remove --id=1"
     "-x delete"
+    "-x remove --id=1"
 )
 
 for i in "${!TESTS[@]}"; do
@@ -84,7 +82,7 @@ for i in "${!TESTS[@]}"; do
     fi
 done
 
-rm -fvR $tests_dst1 $txt1 $txt2 $txt3
+sudo rm -fvR $tests_dst1 $txt1 $txt2 $txt3
 
 echo "============================================================================================================================="
 echo "Running 'auto_uploader_events' tests:"
@@ -112,7 +110,7 @@ $TOOL -x success
 $TOOL -x errors
 $TOOL -x pending
 
-sudo systemctl start auto_uploader_events.service
+sudo systemctl stop auto_uploader_events.service
 sudo rm -fvR $tests_dst1 $tests_dst2 $tests_dst3 $txt1 $txt2 $txt3
 $TOOL -x delete
 $TOOL -x remove --id 1

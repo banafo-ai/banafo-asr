@@ -14,7 +14,7 @@ echo
 if [ $os_name == "debian" ] || [ $os_name == "ubuntu" ];then
 	# Debian/Ubuntu packets
 	sudo apt-get install -y git python3 python3-pip python3-pydub python3-tabulate python3-websockets python3-pyinotify \
-		 python3-requests python3-numpy python3-logging-tree libsqlite3-mod-spatialite ffmpeg
+	python3-requests python3-numpy python3-logging-tree libsqlite3-mod-spatialite ffmpeg
 elif [ $os_name == "fedora" ];then
 	# Fedora (Red Hat) packets
 	sudo yum -y install git python3 python3-pip ffmpeg-free

@@ -39,7 +39,7 @@ etc_sys_timer=$etc_sys"/"$timer
 
 api_dir=$curr_dir"/apiKey.txt"
 cli=$parent_dir"/python/auto_uploader.py"
-ast_def_path=("/var/spool/asterisk/voicemail/" "/var/spool/asterisk/recording/" )
+ast_def_path=("/var/spool/asterisk/voicemail/" "/var/spool/asterisk/recording/" "/var/spool/asterisk/monitor/" )
 fs_def_path=("/usr/local/freeswitch/recordings/" "/usr/local/freeswitch/storage/voicemail/" )
 pip3_depends=("pydub" "requests" "websockets" "tabulate" "pyinotify" "argparse" "logging")
 txt_dir="/usr/local/auto_uploader/txt/"

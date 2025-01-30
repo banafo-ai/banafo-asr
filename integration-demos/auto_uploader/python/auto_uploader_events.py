@@ -21,6 +21,7 @@ class asyncio_data:
         self.path = path
         self.res_path = res_path
         self.checker_time_interval = interval
+        self.processed_files = set()
 
     def put_queue(self, q):
         self.queue = q
@@ -40,6 +41,7 @@ async def auto_upl_new_file_process_async(directory, file_name, dt):
 
     check_file_id = db.sqlite3_uploader_check_file(conn, cursor, file_name)
     if check_file_id > 0:
+        dt.processed_files.discard(file_name)
         return
 
     auto_upl.logger.info(f"New file detected in {directory}: {file_name}")
@@ -88,21 +90,21 @@ async def auto_upl_new_file_process_async(directory, file_name, dt):
     auto_upl.logger.info(f"Processing time for '{file_name}': {end_time - start_time:.2f} seconds")
 
 class NewFileEventHandlerAsync(pyinotify.ProcessEvent):
+
     def __init__(self, data):
         super().__init__()
         self.data = data
         self.directory = data.path
         self.queue = data.queue
+        self.processed_files = data.processed_files
 
-    def process_default(self, event):
-        print ("==> ", event.maskname, ": ", event.pathname)
-
-    def process_IN_CREATE(self, event):
-        auto_upl.logger.info(f"event: IN_CREATE, {event.pathname}")
+    def event_action_process(self, event):
+        if event.pathname in self.processed_files:
+            auto_upl.logger.debug(f"The file '{event.pathname}' was already processed!")
+            return
 
         # Delay to avoid processing a file before it's fully written (may help avoid zero file size)
         time.sleep(0.05)
-        #asyncio.sleep(0.01)
 
         attr = auto_upl.auto_upl_get_file_attr(event.pathname)
         if attr is not None:
@@ -111,20 +113,39 @@ class NewFileEventHandlerAsync(pyinotify.ProcessEvent):
 
             # 44 bytes is typically the size of a WAV header, adjust for other formats if needed
             if file_size > 44:
+                self.processed_files.add(event.pathname)
                 auto_upl.logger.info(f"Processing file: {event.pathname}")
                 asyncio.create_task(auto_upl_new_file_process_async(self.directory, event.pathname, self.data))
             else:
                 auto_upl.logger.warning(f"Empty or incomplete file detected: {event.pathname}")
 
+    def process_default(self, event):
+        print ("==> ", event.maskname, ": ", event.pathname)
+
+    def process_IN_CREATE(self, event):
+        auto_upl.logger.debug(f"event: IN_CREATE, {event.pathname}")
+        self.event_action_process(event)
+
     def process_IN_CLOSE_NOWRITE(self, event):
-        auto_upl.logger.info(f"event: IN_CLOSE_NOWRITE, {event.pathname}")
+        auto_upl.logger.debug(f"event: IN_CLOSE_NOWRITE, {event.pathname}")
+        if os.path.isfile(event.pathname):
+            self.event_action_process(event)
+
+    def process_IN_CLOSE_WRITE(self, event):
+        auto_upl.logger.debug(f"event: IN_CLOSE_WRITE, {event.pathname}")
+        if os.path.isfile(event.pathname):
+            self.event_action_process(event)
+
+    def process_IN_CLOSE_WRITE(self, event):
+        auto_upl.logger.info(f"event: IN_CLOSE_WRITE, {event.pathname}")
         if os.path.isfile(event.pathname):
             auto_upl.logger.info(f"Processing closed file: {event.pathname}")
             asyncio.create_task(auto_upl_new_file_process_async(self.directory, event.pathname, self.data))
 
     def process_IN_MOVED_TO(self, event):
-        auto_upl.logger.info(f"event: IN_MOVED_TO, {event.pathname}")
-        asyncio.create_task(auto_upl_new_file_process_async(self.directory, event.pathname, self.data))
+        auto_upl.logger.debug(f"event: IN_MOVED_TO, {event.pathname}")
+        if os.path.isfile(event.pathname):
+            self.event_action_process(event)
 
 async def auto_upl_ev_checker_async(data):
     conn, cursor = data.conn , data.cursor
@@ -160,7 +181,7 @@ async def auto_upl_monitor_directory_async(data):
     event_handler = NewFileEventHandlerAsync(data)
     wm = pyinotify.WatchManager()
 
-    wm.add_watch(data.path, pyinotify.IN_CLOSE_NOWRITE|pyinotify.IN_MOVED_TO|pyinotify.IN_CREATE, rec=True, auto_add=True)
+    wm.add_watch(data.path, pyinotify.IN_CLOSE_NOWRITE|pyinotify.IN_CLOSE_WRITE|pyinotify.IN_MOVED_TO|pyinotify.IN_CREATE, rec=True, auto_add=True)
 
     notifier = pyinotify.AsyncioNotifier(wm, asyncio.get_event_loop(), default_proc_fun=event_handler)
 
@@ -277,13 +298,13 @@ async def auto_upl_run_asyncio(paths, _args):
 
         if api_key:
             if http_flag == 1:
-                workers = [asyncio.create_task(auto_upl.auto_upl_http_worker(conn, cursor, queue, res_path)) for _ in range(_args.task_nums)]
+                workers = [asyncio.create_task(auto_upl.auto_upl_http_worker(conn, cursor, queue, res_path, asyncio_data_el.processed_files)) for _ in range(_args.task_nums)]
                 if (res_interval > 0):
                     workers = asyncio.create_task(auto_upl_get_result_async(conn, cursor, el))
             else:
-                workers = [asyncio.create_task(auto_upl.auto_upl_wss_worker(conn, cursor, queue, res_path)) for _ in range(_args.task_nums)]
+                workers = [asyncio.create_task(auto_upl.auto_upl_wss_worker(conn, cursor, queue, res_path, asyncio_data_el.processed_files)) for _ in range(_args.task_nums)]
         elif uri:
-            workers = [asyncio.create_task(auto_upl.auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path)) for _ in range(_args.task_nums)]
+            workers = [asyncio.create_task(auto_upl.auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, asyncio_data_el.processed_files)) for _ in range(_args.task_nums)]
 
     try:
         while True:

@@ -49,6 +49,9 @@ class request_data:
 		self.asr_lang = l
 		self.http_flag = f
 
+	def put_async_data(self, pr_f):
+		self.processed_files = pr_f
+
 class LogHandlerType(Enum):
 	CUSTOM  = 'custom'
 	SYSLOG  = 'syslog'
@@ -206,8 +209,14 @@ def auto_upl_remove_path(conn,cursor,_id):
 	db.sqlite3_uploader_delete_path(conn,cursor,_id)
 
 def auto_upl_file_validate(in_filename):
-	base_filename, ext_filename = in_filename.rsplit('.', 1)
 	out_filename = None
+
+	if '.' in in_filename:
+		base_filename, ext_filename = in_filename.rsplit('.', 1)
+		if len(base_filename) == 0:
+			return out_filename
+	else:
+		return out_filename
 
 	if ext_filename == WAV_FILE_EXTEN:
 		out_filename = in_filename
@@ -276,7 +285,7 @@ def auto_upl_scan_dir(conn, cursor, _dir, _asr_lang, path_id):
 
 	logger.info("File scanning and insertion completed.")
 
-async def auto_upl_wss_worker(conn, cursor, queue, res_path):
+async def auto_upl_wss_worker(conn, cursor, queue, res_path, processed_files=None):
 	os.makedirs(res_path, exist_ok=True)
 
 	while True:
@@ -297,6 +306,8 @@ async def auto_upl_wss_worker(conn, cursor, queue, res_path):
 
 		result = await bc.banafo_api_upload_to_wss(api_key, asr_lang, file_name)
 		logger.debug(f"a file '{file_name}',\nresult:\n{result}\n")
+		if processed_files is not None:
+			processed_files.discard(file_name)
 		queue.task_done()
 
 		if result is not None:
@@ -308,7 +319,7 @@ async def auto_upl_wss_worker(conn, cursor, queue, res_path):
 		else:
 			db.sqlite3_uploader_set_flag(conn,cursor,id,"",-9)
 
-async def auto_upl_http_worker(conn, cursor, queue, res_path):
+async def auto_upl_http_worker(conn, cursor, queue, res_path, processed_files=None):
 	os.makedirs(res_path, exist_ok=True)
 
 	while True:
@@ -327,6 +338,8 @@ async def auto_upl_http_worker(conn, cursor, queue, res_path):
 
 		file_id = await bc.banafo_api_upload_to_http(api_key, asr_lang, file_name)
 		logger.info(f"file_id: {file_id}")
+		if processed_files is not None:
+			processed_files.discard(file_name)
 		queue.task_done()
 
 		if file_id is not None:
@@ -346,7 +359,8 @@ async def auto_upl_upload_files_async(conn, cursor, api_key, res_path, tasks, ma
 	else:
 		workers = [asyncio.create_task(auto_upl_wss_worker(conn, cursor, queue, res_path)) for _ in range(tasks)]
 
-	t_files = db.sqlite3_uploader_upload_files(conn, cursor,0) # only flag = 0 ????!!!!
+	t_files = db.sqlite3_uploader_upload_files(conn, cursor,0)
+	t_files.extend(db.sqlite3_uploader_upload_files(conn, cursor, -9, "<="))
 	for el in t_files:
 		_id, _wf_name, _asr_lang = el[:3]
 
@@ -479,7 +493,7 @@ async def auto_upl_queue_async_producer(queue, filename, file_id , txt_res_path,
 		await queue.put(data)
 		return True
 
-async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path):
+async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, processed_files=None):
 	while True:
 		logger.debug(f"worker, wait to get data from the queue")
 
@@ -496,6 +510,8 @@ async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path):
 
 		result = await bc.banafo_audio_stream_to_ws(uri, file_name)
 		logger.debug(f"a file '{file_name}',\nresult:\n{result}\n")
+		if processed_files is not None:
+			processed_files.discard(file_name)
 		queue.task_done()
 
 		if result is not None:
