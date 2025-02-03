@@ -136,12 +136,6 @@ class NewFileEventHandlerAsync(pyinotify.ProcessEvent):
         if os.path.isfile(event.pathname):
             self.event_action_process(event)
 
-    def process_IN_CLOSE_WRITE(self, event):
-        auto_upl.logger.info(f"event: IN_CLOSE_WRITE, {event.pathname}")
-        if os.path.isfile(event.pathname):
-            auto_upl.logger.info(f"Processing closed file: {event.pathname}")
-            asyncio.create_task(auto_upl_new_file_process_async(self.directory, event.pathname, self.data))
-
     def process_IN_MOVED_TO(self, event):
         auto_upl.logger.debug(f"event: IN_MOVED_TO, {event.pathname}")
         if os.path.isfile(event.pathname):
