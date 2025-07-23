@@ -7,8 +7,9 @@ tests_dst2='/usr/local/auto_uploader/test2/'
 tests_dst3='/usr/local/auto_uploader/test3/'
 
 localUri="ws://localhost:6006"
-apiKey="apiKey from banafo.ai"
-badApiKey=${apiKey::-4}
+apiKeyBanafo="apiKey from banafo.ai"
+apiKeyKroko="apiKey from kroko.ai"
+badApiKey=${apiKeyBanafo::-4}
 
 txt1="/usr/local/auto_uploader/txt1/"
 txt2="/usr/local/auto_uploader/txt2/"
@@ -42,13 +43,13 @@ TESTS=(
     "-x success"
     "-x errors"
     "-x delete"
-    "-x insert --path=$tests_dst1 --api=$apiKey --txt=$txt2"
+    "-x insert --path=$tests_dst1 --api=$apiKeyKroko --txt=$txt2"
     "-x upload --log-type console --log-level debug"
     "-x pending"
     "-x success"
     "-x errors"
     "-x delete"
-    "-x insert --path=$tests_dst1 --api=$apiKey --txt=$txt3 --http 1"
+    "-x insert --path=$tests_dst1 --api=$apiKeyBanafo --txt=$txt3 --http 1"
     "-x upload --log-type console --log-level debug"
     "-x pending"
     "-x success"
@@ -58,7 +59,7 @@ TESTS=(
     "-x pending"
     "-x success"
     "-x errors"
-    "-x get --api=$apiKey --log-level debug --log-type console"
+    "-x get --api=$apiKeyBanafo --log-level debug --log-type console"
     "-x pending"
     "-x success"
     "-x errors"
@@ -94,8 +95,8 @@ mkdir -pv $tests_dst2
 mkdir -pv $tests_dst3
 
 $TOOL -x insert --path=$tests_dst1 --uri=$localUri --txt=$txt1
-$TOOL -x insert --path=$tests_dst2 --api=$apiKey --txt=$txt2
-$TOOL -x insert --path=$tests_dst3 --api=$apiKey --txt=$txt3 --http 1 --res-interval 15 --res-attempts 4
+$TOOL -x insert --path=$tests_dst2 --api=$apiKeyKroko --txt=$txt2
+$TOOL -x insert --path=$tests_dst3 --api=$apiKeyBanafo --txt=$txt3 --http 1 --res-interval 15 --res-attempts 4
 
 sudo systemctl start auto_uploader_events.service
 sudo systemctl status auto_uploader_events.service

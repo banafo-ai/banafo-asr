@@ -12,7 +12,7 @@ import numpy as np
 
 import auto_uploader as auto_upl
 
-WSS_API_URL="wss://app.banafo.ai/api/v1/transcripts/pre-recorded"
+WSS_API_URL="wss://app.kroko.ai/api/v1/transcripts/pre-recorded"
 HTTP_API_URL = "https://app.banafo.ai"
 HTTP_UPLOAD_API_URL = HTTP_API_URL + "/api/v1/file"
 HTTP_GET_API_URL = HTTP_API_URL + "/api/v1/transcripts"
