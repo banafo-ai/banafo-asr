@@ -29,6 +29,8 @@ if [ $p3_major -eq 3 ];then
 		# install 'pyasyncore'
 		git clone https://github.com/simonrob/pyasyncore.git
 		python3 -m pip install pyasyncore
+		# fixed issue in 3.13.7
+		sudo pip3 install audioop-lts
 	fi
 fi
 

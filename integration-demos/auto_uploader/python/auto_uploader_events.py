@@ -277,7 +277,7 @@ def auto_upl_signal_handler(sig, frame):
 
 async def auto_upl_run_asyncio(paths, _args):
     for el in paths:
-        id, path, _, api_key, uri, res_interval, _, res_path, http_flag = el
+        id, path, _, api_key, uri, res_interval, _, res_path, http_flag, streaming_flag = el
         asyncio_data_el = asyncio_data(id, path, res_path, _args.checker_time_interval)
 
         os.makedirs(res_path, exist_ok=True)
@@ -298,7 +298,7 @@ async def auto_upl_run_asyncio(paths, _args):
             else:
                 workers = [asyncio.create_task(auto_upl.auto_upl_wss_worker(conn, cursor, queue, res_path, asyncio_data_el.processed_files)) for _ in range(_args.task_nums)]
         elif uri:
-            workers = [asyncio.create_task(auto_upl.auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, asyncio_data_el.processed_files)) for _ in range(_args.task_nums)]
+            workers = [asyncio.create_task(auto_upl.auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, asyncio_data_el.processed_files, streaming_flag)) for _ in range(_args.task_nums)]
 
     try:
         while True:

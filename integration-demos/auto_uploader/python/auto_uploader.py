@@ -33,6 +33,10 @@ LOG_DIR = './logs/'
 LOG_FILE_MSIZE = 40
 LOG_FILE_COUNTER = 10
 
+# 1, for streaming models
+# 0, for pre-recorded models
+ON_PREMISE_STREAMING = 1
+
 loop = True
 supported_langs = ['en-US','bg-BG']
 
@@ -190,7 +194,7 @@ def auto_upl_get_file_attr(file_path):
 def auto_upl_list_paths(conn, cursor):
 	lst = db.sqlite3_uploader_get_paths(conn, cursor)
 	print("\nA table with path&lang for searching and uploading of audio files:")
-	print(tabulate(lst,headers=['id','path','lang','apiKey','uri','res_interval','res_attempts','Result TXT file path','http_flag'],tablefmt='fancy_grid'))
+	print(tabulate(lst,headers=['id','path','lang','apiKey','uri','res_interval','res_attempts','Result TXT file path','http', 'streaming'],tablefmt='fancy_grid'))
 	print("\n")
 
 def auto_upl_list_files(conn,cursor,flag,op='='):
@@ -378,7 +382,7 @@ async def auto_upl_upload_files_async(conn, cursor, api_key, res_path, tasks, ma
 
 	await asyncio.gather(*workers)
 
-def auto_upl_insert_path(conn,cursor,_dir,_lang,_api_key=None,_uri=None,_res_interval=0,_res_attempts=0,_res_path=None,_http_flag=0):
+def auto_upl_insert_path(conn,cursor,_dir,_lang,_api_key=None,_uri=None,_res_interval=0,_res_attempts=0,_res_path=None,_http_flag=0,_streaming_flag=1):
 	_dir_  = os.path.abspath(_dir)
 	if _dir_[-1] != '/':
 		_dir_ = _dir_ + '/'
@@ -394,7 +398,7 @@ def auto_upl_insert_path(conn,cursor,_dir,_lang,_api_key=None,_uri=None,_res_int
 
 	if os.path.exists(_dir_):
 		#if auto_upl_check_lang(_lang):
-			db.sqlite3_uploader_insert_path(conn,cursor,_dir_,_lang,_api_key,_uri,_res_interval,_res_attempts,_res_path,_http_flag)
+			db.sqlite3_uploader_insert_path(conn,cursor,_dir_,_lang,_api_key,_uri,_res_interval,_res_attempts,_res_path,_http_flag,_streaming_flag)
 		#else:
 		#	print(f"\nA '{_lang}' is not supported!Choose from follow:\n{supported_langs}\n")
 	else:
@@ -410,7 +414,7 @@ def auto_upl_scan_and_upload_async(conn, cursor, paths, tasks, max_qsize):
 		return None
 
 	for el in paths:
-		id, path, asr_lang, api_key, uri, _, _, res_path, http_flag = el
+		id, path, asr_lang, api_key, uri, _, _, res_path, http_flag, streaming_flag = el
 
 		logger.info(f"Processing path: {path} (ID: {id})")
 
@@ -424,7 +428,7 @@ def auto_upl_scan_and_upload_async(conn, cursor, paths, tasks, max_qsize):
 		if api_key:
 			asyncio.run(auto_upl_upload_files_async(conn, cursor, api_key, res_path, tasks, max_qsize, http_flag))
 		elif uri:
-			asyncio.run(auto_upl_to_asr_server_async(conn, cursor, uri, res_path, tasks, max_qsize))
+			asyncio.run(auto_upl_to_asr_server_async(conn, cursor, uri, res_path, tasks, max_qsize, streaming_flag))
 		else:
 			return False
 
@@ -493,7 +497,7 @@ async def auto_upl_queue_async_producer(queue, filename, file_id , txt_res_path,
 		await queue.put(data)
 		return True
 
-async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, processed_files=None):
+async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, processed_files=None, streaming_flag=ON_PREMISE_STREAMING):
 	while True:
 		logger.debug(f"worker, wait to get data from the queue")
 
@@ -508,7 +512,11 @@ async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, process
 
 		logger.debug(f"worker, get file: '{file_name}'")
 
-		result = await bc.banafo_audio_stream_to_ws(uri, file_name)
+		if streaming_flag == 0:
+			result = await bc.banafo_audio_stream_to_ws(uri, file_name)
+		else:
+			result = await bc.banafo_audio_stream_ws_to_local(uri, file_name)
+
 		logger.debug(f"a file '{file_name}',\nresult:\n{result}\n")
 		if processed_files is not None:
 			processed_files.discard(file_name)
@@ -523,7 +531,7 @@ async def auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, process
 		else:
 			db.sqlite3_uploader_set_flag(conn,cursor,id,"",-9)
 
-async def auto_upl_to_asr_server_async(conn, cursor, uri, res_path, threads, max_qsize):
+async def auto_upl_to_asr_server_async(conn, cursor, uri, res_path, threads, max_qsize, streaming_flag):
 	logger.info(f"Banafo ASR server (async): {uri}")
 	logger.info(f"Result TXT files path: {res_path}")
 
@@ -531,7 +539,7 @@ async def auto_upl_to_asr_server_async(conn, cursor, uri, res_path, threads, max
 
 	queue = asyncio.Queue(maxsize=max_qsize)
 
-	workers = [asyncio.create_task(auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path)) for _ in range(threads)]
+	workers = [asyncio.create_task(auto_upl_asr_server_worker(conn, cursor, queue, uri, res_path, None, streaming_flag)) for _ in range(threads)]
 
 	files = db.sqlite3_uploader_get_file_status_or(conn, cursor, 0, -9)
 	logger.info(f"files: {len(files)}")
@@ -635,6 +643,13 @@ def get_args():
     )
 
     parser.add_argument(
+        "--local-streaming",
+        type=int,
+        default=ON_PREMISE_STREAMING,
+        help="a 'local-streaming' flag activates using of 'on premise streaming' models",
+    )
+
+    parser.add_argument(
         "--task-nums",
         type=int,
         default=MAX_TASKS,
@@ -727,8 +742,9 @@ def main():
             _res_path = None
 
         _http_flag = int(args.http)
+        _streaming_flag = int(args.local_streaming)
 
-        auto_upl_insert_path(conn,cursor,_path,_lang,_api,_uri,_res_interval,_res_attempts,_res_path,_http_flag)
+        auto_upl_insert_path(conn,cursor,_path,_lang,_api,_uri,_res_interval,_res_attempts,_res_path,_http_flag,_streaming_flag)
         auto_upl_list_paths(conn, cursor)
     elif 'list' in mode:
         auto_upl_list_paths(conn, cursor)

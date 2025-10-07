@@ -53,7 +53,7 @@ def sqlite3_uploader_get_path_from_api(conn, cursor, api_key):
 	return [list(row) for row in cursor.fetchall()]
 
 def sqlite3_uploader_get_paths(conn, cursor):
-	query = f"""SELECT id, path, asr_lang, api_key, uri, get_result_interval, get_result_attempts, res_path, http_flag 
+	query = f"""SELECT id, path, asr_lang, api_key, uri, get_result_interval, get_result_attempts, res_path, http_flag, streaming_flag 
 				FROM {UPLOADER_TABLE_PATHS}"""
 
 	sqlite3_exec(conn, cursor, query)
@@ -175,6 +175,7 @@ def sqlite3_uploader_init(cursor):
         get_result_attempts integer,
         res_path varchar(255),
         http_flag integer default 0,
+        streaming_flag integer default 1,
         created_ts integer
     )
 	''')
@@ -194,30 +195,30 @@ def sqlite3_uploader_init(cursor):
     )
 	''')
 
-def sqlite3_uploader_insert_path(conn, cursor, dir_name, asr_lang, api_key, uri, res_interval=0, res_attempts=0, res_path=None, http_flag=0):
+def sqlite3_uploader_insert_path(conn, cursor, dir_name, asr_lang, api_key, uri, res_interval=0, res_attempts=0, res_path=None, http_flag=0, streaming_flag=1):
 	_id = sqlite3_uploader_check_path(conn, cursor, dir_name)
 
 	if _id == 0:
 		query = f'''
 			INSERT INTO {UPLOADER_TABLE_PATHS} (path, asr_lang, api_key, uri, get_result_interval, 
-												get_result_attempts, res_path, created_ts, http_flag)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+												get_result_attempts, res_path, created_ts, http_flag, streaming_flag)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		'''
 
 		record = (
 			dir_name, asr_lang or '', api_key or '', uri or '',
-			res_interval, res_attempts, res_path, int(time.time()), int(http_flag)
+			res_interval, res_attempts, res_path, int(time.time()), int(http_flag), streaming_flag
 		)
 	else:
 		query = f'''
 			UPDATE {UPLOADER_TABLE_PATHS}
 				SET asr_lang = ?, api_key = ?, uri = ?, get_result_interval = ?, 
-				get_result_attempts = ?, res_path = ?, http_flag = ?
+				get_result_attempts = ?, res_path = ?, http_flag = ?, streaming_flag = ?
 			WHERE id = ?'''
 
 		record = (
 			asr_lang or '', api_key or '', uri or '', 
-			res_interval, res_attempts, res_path, int(http_flag), _id
+			res_interval, res_attempts, res_path, int(http_flag), streaming_flag,_id
 		)
 
 	sqlite3_exec(conn, cursor, query, record)

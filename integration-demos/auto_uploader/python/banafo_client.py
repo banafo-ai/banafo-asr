@@ -12,10 +12,22 @@ import numpy as np
 
 import auto_uploader as auto_upl
 
-WSS_API_URL="wss://app.kroko.ai/api/v1/transcripts/pre-recorded"
+WSS_MAIN_URL = "wss://app.kroko.ai"
+WSS_API_URL= WSS_MAIN_URL + "/api/v1/transcripts/pre-recorded"
+WSS_STREAMING_API_URL= WSS_MAIN_URL + "/api/v1/transcripts/streaming"
 HTTP_API_URL = "https://app.banafo.ai"
 HTTP_UPLOAD_API_URL = HTTP_API_URL + "/api/v1/file"
 HTTP_GET_API_URL = HTTP_API_URL + "/api/v1/transcripts"
+
+# samples_per_message = 1600,
+# seconds_per_message = 0.1,
+# 16KHz sample rate
+#
+# samples_per_message = 8000,
+# seconds_per_message = 0.1,
+# 80 000 samples/per second, 80KHz sample rate ???
+DF_SAMPLES_PER_MESSAGE = 8000
+DF_SECONDS_PER_MESSAGE = 0.1
 
 def generate_post_data(_wf_name,_lang):
 	file_name = os.path.basename(_wf_name)
@@ -30,15 +42,7 @@ def get_result_only_text(res):
 	_json = json.loads(res)
 	return _json['text']
 
-def banafo_read_wav(filename):
-	with wave.open(filename) as f:
-		assert f.getnchannels() == 1, f.getnchannels()
-		assert f.getsampwidth() == 2, f.getsampwidth()
-		frames = f.readframes(f.getnframes())
-		samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768
-		return samples, f.getframerate()
-
-async def banafo_audio_stream_to_ws(uri, wf_name, wflag=False, max_retries=5, retry_delay=10):
+def banafo_get_ssl_context(uri):
 	_uri = uri.split(":");
 
 	if 'wss' in _uri[0]:
@@ -48,12 +52,26 @@ async def banafo_audio_stream_to_ws(uri, wf_name, wflag=False, max_retries=5, re
 	else:
 		ssl_context = None
 
+	return ssl_context
+
+def banafo_read_wav(filename):
+	with wave.open(filename) as f:
+		assert f.getnchannels() == 1, f.getnchannels()
+		assert f.getsampwidth() == 2, f.getsampwidth()
+		frames = f.readframes(f.getnframes())
+		samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768
+		return samples, f.getframerate()
+
+async def banafo_audio_stream_to_ws(uri, wf_name, wflag=False, max_retries=5, retry_delay=10):
+	ssl_context = banafo_get_ssl_context(uri)
+
 	for attempt in range(1, max_retries + 1):
 		try:
 			async with websockets.connect(uri, ssl=ssl_context) as websocket:
 				if wflag:
 					rr = await websocket.recv()
 					auto_upl.logger.info(f"receive: {rr}")
+					print (f"debug: {rr}")
 
 				samples, rate = banafo_read_wav(wf_name)
 				buf = rate.to_bytes(4, byteorder="little") + (samples.size * 4).to_bytes(4, byteorder="little") + samples.tobytes()
@@ -156,6 +174,45 @@ def banafo_api_result(api_key, file_id):
 		auto_upl.logger.error(f"Request GET failed with status code: {response.status_code}, text: {response.text}")
 		return None
 
+async def banafo_receive_results(socket):
+	last_message = ""
+	async for message in socket:
+		if message != "Done!":
+			_json = json.loads(message)
+			if _json['type'] == 'final':
+				res = _json['text']
+				if len(res) > 0:
+					last_message += res
+		else:
+			break
+	return last_message
+
+async def banafo_audio_stream_ws_to_local(uri, wf_name, samples_per_message=DF_SAMPLES_PER_MESSAGE, seconds_per_message=DF_SECONDS_PER_MESSAGE):
+	ssl_context = banafo_get_ssl_context(uri)
+	samples, rate = banafo_read_wav(wf_name)
+
+	try:
+		async with websockets.connect(uri, ssl = ssl_context) as websocket:
+			receive_task = asyncio.create_task(banafo_receive_results(websocket))
+
+			start = 0
+			while start < samples.shape[0]:
+				end = start + samples_per_message
+				end = min(end, samples.shape[0])
+				d = samples.data[start:end].tobytes()
+
+				await websocket.send(d)
+
+				await asyncio.sleep(seconds_per_message)
+
+				start += samples_per_message
+
+			await websocket.send("Done")
+
+			return await receive_task
+	except Exception as e:
+		auto_upl.logger.error(f"Error: {str(e)}", exc_info=False)
+
 def get_args():
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -228,6 +285,11 @@ def main():
 		if uri is not None and file_name is not None:
 			print (uri)
 			print (asyncio.run(banafo_audio_stream_to_ws(uri, file_name)))
+
+	elif 'online' in mode:
+		if uri is not None and file_name is not None:
+			print (uri)
+			print (asyncio.run(banafo_audio_stream_ws_to_local(uri, file_name)))
 
 	elif 'api-wss' in mode:
 		if api is not None and file_name is not None:
